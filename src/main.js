@@ -7,6 +7,9 @@ let pausedText;
 let gameOverText;
 let currentLevel = 1;
 
+const BUILD_VERSION = "v0.1.8"; // <-- update this anytime you deploy
+
+
 // ---------- CONFIG ----------
 const TILE = 48;
 const COLS = 28;
@@ -143,6 +146,9 @@ class StartScene extends Phaser.Scene {
       fontSize: '14px',
       color: '#888888'
     }).setOrigin(0.5);
+    
+    // version number
+    drawVersionTag(this);
   }
 
   update() {
@@ -1151,4 +1157,16 @@ function updateScore() {
   }
 
   highScoreText.setText(`HIGH: ${highScore}`);
+}
+function drawVersionTag(scene) {
+  scene.add.text(
+    width - 10,
+    height - 10,
+    BUILD_VERSION,
+    {
+      fontFamily: "monospace",
+      fontSize: "12px",
+      color: "#666666"
+    }
+  ).setOrigin(1, 1); // bottom-right corner
 }
