@@ -9,7 +9,7 @@ let gameOverText;
 let currentLevel = 1;
 let pendingStartLevel = null; // used by Level Select
 
-const BUILD_VERSION = "v0.1.9a"; // <-- update this anytime you deploy
+const BUILD_VERSION = "v0.1.9.1"; // <-- update this anytime you deploy
 
 
 // ---------- CONFIG ----------
@@ -1036,8 +1036,9 @@ function startLevel(scene, levelNum) {
   scene.physics.add.existing(player);
   
   // Set world bounds to play area only (excluding HUD padding)
+  // Note: setCollideWorldBounds is disabled to allow portal wraparound
   scene.physics.world.setBounds(0, HUD_TOP_PADDING, PLAY_AREA_WIDTH, PLAY_AREA_HEIGHT);
-  player.body.setCollideWorldBounds(true);
+  player.body.setCollideWorldBounds(false); // Allow wraparound portals
 
   // Collision body should match visual size
   const carWidth = carDisplayWidth * 0.85; // Slightly smaller for better gameplay feel
@@ -1093,8 +1094,13 @@ function startLevel(scene, levelNum) {
 
   scene.physics.add.overlap(player, enemies, (_, e) => {
     if (scenePaused) return;
-    if (powered) handleEnemyHit(scene, e);
-    else handlePlayerHit(scene);
+    // Check if powered AND this specific enemy can be eaten
+    if (powered && e.getData('canBeEaten')) {
+      handleEnemyHit(scene, e);
+    } else {
+      // Either not powered, or enemy already respawned (can't be eaten)
+      handlePlayerHit(scene);
+    }
   });
 
   cursors = scene.input.keyboard.createCursorKeys();
@@ -1187,7 +1193,14 @@ function updateGame(time, delta) {
   const input = getInputDirection();
   updateCarPhysics(player, input, delta);
 
-  enemies.forEach(e => updateEnemy(this, e, player));
+  // Check for portal wraparound (player)
+  checkPortalWrap(player);
+
+  // Update enemies and check their portal wraparound
+  enemies.forEach(e => {
+    updateEnemy(this, e, player);
+    checkPortalWrap(e);
+  });
 }
 
 function updateCarPhysics(car, input, delta) {
@@ -1509,6 +1522,32 @@ function goToward(enemy, nx, ny, scene) {
   
   // SVG faces east (right), so no rotation adjustment needed
   enemy.angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+}
+
+function checkPortalWrap(entity) {
+  const margin = TILE; // One tile margin for smooth transition
+  const playAreaLeft = 0;
+  const playAreaRight = PLAY_AREA_WIDTH;
+  const playAreaTop = HUD_TOP_PADDING;
+  const playAreaBottom = HUD_TOP_PADDING + PLAY_AREA_HEIGHT;
+  
+  // Horizontal wrap (left/right)
+  if (entity.x < playAreaLeft - margin) {
+    // Exited left, appear on right
+    entity.x = playAreaRight + margin;
+  } else if (entity.x > playAreaRight + margin) {
+    // Exited right, appear on left
+    entity.x = playAreaLeft - margin;
+  }
+  
+  // Vertical wrap (top/bottom)
+  if (entity.y < playAreaTop - margin) {
+    // Exited top, appear on bottom
+    entity.y = playAreaBottom + margin;
+  } else if (entity.y > playAreaBottom + margin) {
+    // Exited bottom, appear on top
+    entity.y = playAreaTop - margin;
+  }
 }
 
 function nearestGateByPath(sr, sc) {
