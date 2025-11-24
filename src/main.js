@@ -5,11 +5,15 @@ let scenePaused = false;
 let readyText;
 let pausedText;
 let gameOverText;
+let pauseMenuContainer;
+let pauseMenuBackground;
+let pauseMenuButtons = [];
+let selectedButtonIndex = 0; // Track which button is selected
 
 let currentLevel = 1;
 let pendingStartLevel = null; // used by Level Select
 
-const BUILD_VERSION = "v0.1.9.1"; // <-- update this anytime you deploy
+const BUILD_VERSION = "v0.1.9.2"; // <-- update this anytime you deploy
 
 
 // ---------- CONFIG ----------
@@ -111,6 +115,7 @@ let player, cursors, keys, gamepad;
 let scoreText, highScoreText, highScoreLabelText, livesIcons;
 let walls, dotsGroup, powerGroup;
 let enemies = [];
+let sparkParticles;
 
 // ---------- HIGH SCORE HELPERS (TOP-10 WITH INITIALS) ----------
 const HIGH_SCORES_KEY = 'lazrdrift_highScores_v1';
@@ -309,7 +314,7 @@ class LevelSelectScene extends Phaser.Scene {
     const centerX = width / 2;
 
     // Adjust this array if you add more levels/maps later
-    this.levels = [1, 2, 3, 4];
+    this.levels = [1, 2, 3, 4, 5];
     this.selectedIndex = 0;
 
     this.add.text(centerX, 60, 'LEVEL SELECT', {
@@ -803,9 +808,11 @@ class GameScene extends Phaser.Scene {
     this.load.tilemapCSV('level1', 'maps/level1.csv');
     this.load.tilemapCSV('level2', 'maps/level2.csv');
     this.load.tilemapCSV('level3', 'maps/level3.csv');
+    this.load.tilemapCSV('level4', 'maps/level4.csv');
+    this.load.tilemapCSV('level5', 'maps/level5.csv');
     this.load.svg('redCar', 'red-car.svg', { width: 36, height: 20 });
     this.load.svg('enemy', 'enemy.svg', { width: 32, height: 28 });
-    this.load.svg('logo', 'LD-logo.svg', { width: 96, height: 96 });
+    this.load.svg('logo', 'LD-logo.svg', { width: 168, height: 168 });
     
     // Use spritesheet so each tile is a 24x24 frame
     this.load.spritesheet('tiles', 'maps/sprites.png', {
@@ -823,6 +830,8 @@ class GameScene extends Phaser.Scene {
     this.load.json('level1_dots', 'maps/level1-dots.json');
     this.load.json('level2_dots', 'maps/level2-dots.json');
     this.load.json('level3_dots', 'maps/level3-dots.json');
+    this.load.json('level4_dots', 'maps/level4-dots.json');
+    this.load.json('level5_dots', 'maps/level5-dots.json');
 
 
     // Initialize highScore from the #1 entry in the table (fallback to old single value)
@@ -1035,6 +1044,29 @@ function startLevel(scene, levelNum) {
   player.setDepth(10); // player on top of everything
   scene.physics.add.existing(player);
   
+  // Create spark particle system for wall collisions
+  // Create a small streak texture for particles (2-5px length)
+  const graphics = scene.add.graphics();
+  graphics.fillStyle(0x9b41c6, 1); // Purple color
+  graphics.fillRect(0, 1, 4, 1); // Horizontal streak: 4px wide, 1px tall
+  graphics.generateTexture('spark', 4, 2); // 4x2 texture
+  graphics.destroy();
+  
+  // Create particle emitter for sparks
+  sparkParticles = scene.add.particles(0, 0, 'spark', {
+    speed: { min: 20, max: 40 }, // Slower speed for 6px radius spread
+    angle: { min: 0, max: 360 }, // Will be updated per collision
+    scaleX: { min: 0.5, max: 1.25 }, // Vary length: 2-5px (0.5×4=2, 1.25×4=5)
+    scaleY: 1, // Keep thickness consistent
+    alpha: { start: 1, end: 0 }, // Fade from 100% to 0% opacity
+    lifespan: 50, // Very short lifespan - quick flash
+    gravityY: 0, // No gravity for top-down view - particles fly outward only
+    quantity: 1, // 1 particle per emission
+    frequency: 50,
+    emitting: false
+  });
+  sparkParticles.setDepth(15); // Above player
+  
   // Set world bounds to play area only (excluding HUD padding)
   // Note: setCollideWorldBounds is disabled to allow portal wraparound
   scene.physics.world.setBounds(0, HUD_TOP_PADDING, PLAY_AREA_WIDTH, PLAY_AREA_HEIGHT);
@@ -1052,6 +1084,7 @@ function startLevel(scene, levelNum) {
   player.setData('spawnX', px); // Store spawn position
   player.setData('spawnY', py);
   player.setData('spawnRotation', pRotation);
+  player.setData('lastSparkTime', 0); // Track last spark emission time
   player.angle = pRotation; // Set initial rotation from spawn data
 
   // spawn enemies (use enemySpawnData if available, fallback to old system)
@@ -1069,7 +1102,50 @@ function startLevel(scene, levelNum) {
     for (let pos of penSpawns) spawnEnemy(scene, pos);
   }
 
-  scene.physics.add.collider(player, walls);
+  scene.physics.add.collider(player, walls, (playerObj, wall) => {
+    // Only trigger sparks on initial high-speed impact
+    const currentTime = scene.time.now;
+    const lastSparkTime = playerObj.getData('lastSparkTime') || 0;
+    const minSparkInterval = 300; // Minimum 300ms between spark bursts
+    
+    // Check if moving fast and enough time has passed since last spark
+    if (playerObj.body.velocity.length() > 150 && currentTime - lastSparkTime > minSparkInterval) {
+      // Calculate movement direction
+      const velocityAngle = Math.atan2(playerObj.body.velocity.y, playerObj.body.velocity.x);
+      const velocityAngleDeg = Phaser.Math.RadToDeg(velocityAngle);
+      
+      // Get more accurate contact point using physics bodies
+      const playerBounds = playerObj.body;
+      const wallBounds = wall.body;
+      
+      // Calculate overlap center - where the collision is happening
+      const overlapLeft = Math.max(playerBounds.left, wallBounds.left);
+      const overlapRight = Math.min(playerBounds.right, wallBounds.right);
+      const overlapTop = Math.max(playerBounds.top, wallBounds.top);
+      const overlapBottom = Math.min(playerBounds.bottom, wallBounds.bottom);
+      
+      const contactX = (overlapLeft + overlapRight) / 2;
+      const contactY = (overlapTop + overlapBottom) / 2;
+      
+      // Sparks spray away from movement direction (opposite)
+      const oppositeAngle = velocityAngleDeg + 180;
+      
+      sparkParticles.setPosition(contactX, contactY);
+      sparkParticles.setConfig({
+        angle: { 
+          min: oppositeAngle - 5, 
+          max: oppositeAngle + 5 
+        },
+        speed: { min: 20, max: 40 } // Slow speed for tight ~6px spread
+      });
+      
+      // Emit 2 particles (double the previous 1)
+      sparkParticles.explode(2);
+      
+      // Update last spark time
+      playerObj.setData('lastSparkTime', currentTime);
+    }
+  });
   enemies.forEach(e => scene.physics.add.collider(e, walls));
 
   scene.physics.add.overlap(player, dotsGroup, (_, dot) => {
@@ -1158,7 +1234,8 @@ function showReady(scene, levelNum) {
     .text(width / 2, height / 2 + 40, `READY! (Level ${levelNum})`, {
       fontFamily: 'monospace', fontSize: '32px', color: '#ffff00',
     })
-    .setOrigin(0.5);
+    .setOrigin(0.5)
+    .setDepth(1000); // Very high depth to be above everything
   scene.time.delayedCall(1400, () => {
     scenePaused = false;
     readyText.destroy();
@@ -1183,6 +1260,13 @@ function updateGame(time, delta) {
   const pausePressed = Phaser.Input.Keyboard.JustDown(keys.SPACE) || gamepadPause;
   
   if (pausePressed) togglePause(this);
+  
+  // Handle pause menu navigation
+  if (scenePaused && pauseMenuButtons.length > 0) {
+    handlePauseMenuNavigation(this);
+    return; // Don't update game while paused
+  }
+  
   if (scenePaused && pausedText) return;
 
   if (powered && time >= powerTimer) {
@@ -1260,16 +1344,228 @@ function updateCarPhysics(car, input, delta) {
 function togglePause(scene) {
   scenePaused = !scenePaused;
   if (scenePaused) {
-    pausedText = scene.add.text(width / 2, height / 2, 'PAUSED', {
-      fontFamily: 'monospace',
-      fontSize: '42px',
-      color: '#ffff00',
-    }).setOrigin(0.5);
+    // Stop all movement
     enemies.forEach(e => e.body.setVelocity(0, 0));
     player.body.setVelocity(0, 0);
+    
+    // Create pause menu
+    createPauseMenu(scene);
   } else {
-    if (pausedText) pausedText.destroy();
+    // Destroy pause menu
+    destroyPauseMenu();
   }
+}
+
+function createPauseMenu(scene) {
+  const menuWidth = 400;
+  const menuHeight = 350;
+  const menuX = width / 2;
+  const menuY = height / 2;
+  
+  // Create container for all pause menu elements
+  pauseMenuContainer = scene.add.container(0, 0);
+  pauseMenuContainer.setDepth(1000); // Very high depth to be above everything
+  
+  // Semi-transparent dark overlay over entire screen
+  const overlay = scene.add.rectangle(0, 0, width, height, 0x000000, 0.7);
+  overlay.setOrigin(0, 0);
+  pauseMenuContainer.add(overlay);
+  
+  // White background for menu
+  pauseMenuBackground = scene.add.rectangle(menuX, menuY, menuWidth, menuHeight, 0xffffff);
+  pauseMenuBackground.setStrokeStyle(4, 0x000000);
+  pauseMenuContainer.add(pauseMenuBackground);
+  
+  // "PAUSED" title
+  pausedText = scene.add.text(menuX, menuY - 120, 'PAUSED', {
+    fontFamily: 'monospace',
+    fontSize: '48px',
+    color: '#000000',
+    fontStyle: 'bold'
+  }).setOrigin(0.5);
+  pauseMenuContainer.add(pausedText);
+  
+  // Create menu buttons
+  const buttonY = menuY - 40;
+  const buttonSpacing = 80;
+  
+  // Resume button
+  const resumeButton = createMenuButton(scene, menuX, buttonY, 'RESUME', () => {
+    togglePause(scene);
+  });
+  pauseMenuContainer.add(resumeButton.background);
+  pauseMenuContainer.add(resumeButton.text);
+  pauseMenuButtons.push(resumeButton);
+  
+  // Restart button - restarts current level
+  const restartButton = createMenuButton(scene, menuX, buttonY + buttonSpacing, 'RESTART', () => {
+    destroyPauseMenu();
+    scenePaused = false;
+    // Restart the current level (don't reset score/lives/level number)
+    startLevel(scene, currentLevel);
+  });
+  pauseMenuContainer.add(restartButton.background);
+  pauseMenuContainer.add(restartButton.text);
+  pauseMenuButtons.push(restartButton);
+  
+  // Quit button
+  const quitButton = createMenuButton(scene, menuX, buttonY + buttonSpacing * 2, 'QUIT', () => {
+    destroyPauseMenu();
+    scenePaused = false;
+    scene.scene.start('StartScene');
+  });
+  pauseMenuContainer.add(quitButton.background);
+  pauseMenuContainer.add(quitButton.text);
+  pauseMenuButtons.push(quitButton);
+  
+  // Set initial selection to first button (Resume)
+  selectedButtonIndex = 0;
+  updateButtonSelection();
+}
+
+function createMenuButton(scene, x, y, text, callback) {
+  const buttonWidth = 300;
+  const buttonHeight = 60;
+  
+  // Button background
+  const bg = scene.add.rectangle(x, y, buttonWidth, buttonHeight, 0x9b41c6);
+  bg.setStrokeStyle(3, 0x000000);
+  bg.setInteractive({ useHandCursor: true });
+  
+  // Button text
+  const txt = scene.add.text(x, y, text, {
+    fontFamily: 'monospace',
+    fontSize: '32px',
+    color: '#ffffff',
+    fontStyle: 'bold'
+  }).setOrigin(0.5);
+  
+  // Mouse hover - update selection index
+  bg.on('pointerover', () => {
+    const buttonIndex = pauseMenuButtons.findIndex(btn => btn.background === bg);
+    if (buttonIndex !== -1) {
+      selectedButtonIndex = buttonIndex;
+      updateButtonSelection();
+    }
+  });
+  
+  // Click handler
+  bg.on('pointerdown', callback);
+  
+  return { background: bg, text: txt, callback: callback };
+}
+
+function destroyPauseMenu() {
+  if (pauseMenuContainer) {
+    pauseMenuContainer.destroy();
+    pauseMenuContainer = null;
+  }
+  pausedText = null;
+  pauseMenuBackground = null;
+  pauseMenuButtons = [];
+  selectedButtonIndex = 0;
+}
+
+function handlePauseMenuNavigation(scene) {
+  // Track if input was just pressed this frame
+  if (!scene.pauseMenuInputCooldown) {
+    scene.pauseMenuInputCooldown = 0;
+  }
+  
+  // Add cooldown to prevent rapid firing
+  if (scene.time.now < scene.pauseMenuInputCooldown) {
+    return;
+  }
+  
+  let directionPressed = false;
+  let selectPressed = false;
+  
+  // Keyboard navigation - arrow keys
+  if (Phaser.Input.Keyboard.JustDown(cursors.up)) {
+    selectedButtonIndex--;
+    if (selectedButtonIndex < 0) selectedButtonIndex = pauseMenuButtons.length - 1;
+    directionPressed = true;
+  } else if (Phaser.Input.Keyboard.JustDown(cursors.down)) {
+    selectedButtonIndex++;
+    if (selectedButtonIndex >= pauseMenuButtons.length) selectedButtonIndex = 0;
+    directionPressed = true;
+  }
+  
+  // Keyboard selection - Enter key
+  if (Phaser.Input.Keyboard.JustDown(scene.input.keyboard.addKey('ENTER'))) {
+    selectPressed = true;
+  }
+  
+  // Gamepad navigation
+  if (gamepad) {
+    // D-pad or left stick up/down
+    const dpadUp = gamepad.buttons[12] && gamepad.buttons[12].pressed;
+    const dpadDown = gamepad.buttons[13] && gamepad.buttons[13].pressed;
+    const stickY = gamepad.axes[1] ? gamepad.axes[1].getValue() : 0;
+    
+    if (dpadUp || stickY < -0.5) {
+      if (!scene.gamepadUpPressed) {
+        selectedButtonIndex--;
+        if (selectedButtonIndex < 0) selectedButtonIndex = pauseMenuButtons.length - 1;
+        directionPressed = true;
+        scene.gamepadUpPressed = true;
+      }
+    } else {
+      scene.gamepadUpPressed = false;
+    }
+    
+    if (dpadDown || stickY > 0.5) {
+      if (!scene.gamepadDownPressed) {
+        selectedButtonIndex++;
+        if (selectedButtonIndex >= pauseMenuButtons.length) selectedButtonIndex = 0;
+        directionPressed = true;
+        scene.gamepadDownPressed = true;
+      }
+    } else {
+      scene.gamepadDownPressed = false;
+    }
+    
+    // A button (button 0) to select
+    if (gamepad.buttons[0] && gamepad.buttons[0].pressed) {
+      if (!scene.gamepadSelectPressed) {
+        selectPressed = true;
+        scene.gamepadSelectPressed = true;
+      }
+    } else {
+      scene.gamepadSelectPressed = false;
+    }
+  }
+  
+  // Update visual selection if direction was pressed
+  if (directionPressed) {
+    updateButtonSelection();
+    scene.pauseMenuInputCooldown = scene.time.now + 150; // 150ms cooldown
+  }
+  
+  // Execute selected button's callback if select was pressed
+  if (selectPressed) {
+    const selectedButton = pauseMenuButtons[selectedButtonIndex];
+    if (selectedButton && selectedButton.callback) {
+      selectedButton.callback();
+    }
+  }
+}
+
+function updateButtonSelection() {
+  // Reset all buttons to default state
+  pauseMenuButtons.forEach((button, index) => {
+    if (index === selectedButtonIndex) {
+      // Selected state
+      button.background.setFillStyle(0xb855e6); // Lighter purple
+      button.text.setScale(1.1);
+      button.background.setStrokeStyle(4, 0xffd700); // Gold border for selected
+    } else {
+      // Default state
+      button.background.setFillStyle(0x9b41c6); // Original purple
+      button.text.setScale(1.0);
+      button.background.setStrokeStyle(3, 0x000000); // Black border
+    }
+  });
 }
 
 function getInputDirection() {
@@ -1374,11 +1670,119 @@ function spawnEnemyAtPosition(scene, x, y, rotation) {
   scene.physics.add.collider(e, walls);
 }
 
+// TRON-style grid-based de-resolution effect
+function createDerezEffect(scene, entity, color, duration = 1200) {
+  // Hide the entity immediately
+  entity.setVisible(false);
+  
+  // Get entity bounds
+  const bounds = entity.getBounds();
+  const centerX = bounds.centerX;
+  const centerY = bounds.centerY;
+  const width = bounds.width;
+  const height = bounds.height;
+  
+  // Create 6x6 pixel grid
+  const pixelSize = 6;
+  const cols = Math.ceil(width / pixelSize);
+  const rows = Math.ceil(height / pixelSize);
+  const pixels = [];
+  
+  // Create grid of pixels covering the entity
+  const startX = centerX - (cols * pixelSize) / 2;
+  const startY = centerY - (rows * pixelSize) / 2;
+  
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const px = startX + col * pixelSize + pixelSize / 2;
+      const py = startY + row * pixelSize + pixelSize / 2;
+      
+      const pixel = scene.add.rectangle(px, py, pixelSize, pixelSize, color);
+      pixel.setDepth(20); // Above everything
+      
+      // Store pixel with random delay for staggered disintegration
+      const delay = Phaser.Math.Between(0, duration * 0.5);
+      const angle = Math.atan2(py - centerY, px - centerX);
+      const distFromCenter = Phaser.Math.Distance.Between(px, py, centerX, centerY);
+      
+      pixels.push({ 
+        rect: pixel, 
+        delay: delay,
+        startTime: null,
+        angle: angle,
+        distFromCenter: distFromCenter,
+        originalX: px,
+        originalY: py
+      });
+    }
+  }
+  
+  // Animate pixels disintegrating
+  const startTime = scene.time.now;
+  
+  const updatePixels = () => {
+    const elapsed = scene.time.now - startTime;
+    
+    if (elapsed >= duration) {
+      // Clean up all pixels
+      pixels.forEach(p => p.rect.destroy());
+      return;
+    }
+    
+    let allGone = true;
+    pixels.forEach(p => {
+      if (elapsed < p.delay) {
+        // Pixel hasn't started disintegrating yet
+        allGone = false;
+        return;
+      }
+      
+      if (p.startTime === null) {
+        p.startTime = elapsed;
+      }
+      
+      const pixelElapsed = elapsed - p.startTime;
+      const pixelDuration = duration - p.delay;
+      const progress = Math.min(pixelElapsed / pixelDuration, 1.0);
+      
+      if (progress < 1.0) {
+        allGone = false;
+        
+        // Move pixel outward from center
+        const moveDistance = progress * 30; // 30px max movement
+        const newX = p.originalX + Math.cos(p.angle) * moveDistance;
+        const newY = p.originalY + Math.sin(p.angle) * moveDistance;
+        p.rect.setPosition(newX, newY);
+        
+        // Fade out
+        p.rect.setAlpha(1.0 - progress);
+        
+        // Shrink slightly
+        p.rect.setScale(1.0 - progress * 0.5);
+      } else if (p.rect.visible) {
+        p.rect.setVisible(false);
+      }
+    });
+    
+    if (allGone) {
+      pixels.forEach(p => p.rect.destroy());
+      return;
+    }
+    
+    // Continue animation
+    scene.time.delayedCall(16, updatePixels);
+  };
+  
+  updatePixels();
+}
+
 function handleEnemyHit(scene, enemy) {
   // Only allow eating if enemy is marked as eatable
   if (!enemy.getData('canBeEaten')) return;
   
-  enemy.setVisible(false);
+  // Create TRON grid de-rez effect (cyan color for eatable enemy)
+  createDerezEffect(scene, enemy, 0x00e5ff, 800);
+  
   enemy.body.enable = false;
   score += KILL_SCORE;
   updateScore();
@@ -1403,16 +1807,32 @@ function handleEnemyHit(scene, enemy) {
 }
 
 function handlePlayerHit(scene) {
+  // Pause game immediately
+  scenePaused = true;
+  
+  // Stop all movement
+  player.body.setVelocity(0, 0);
+  enemies.forEach(e => e.body.setVelocity(0, 0));
+  
+  // Create TRON grid de-rez effect (white color)
+  createDerezEffect(scene, player, 0xffffff, 1200);
+  
   lives = Math.max(0, lives - 1);
   updateLivesDisplay(scene);
-  if (lives > 0) resetAfterDeath(scene);
-  else doGameOver(scene);
+  
+  if (lives > 0) {
+    // Wait for derez to finish, then reset
+    scene.time.delayedCall(1300, () => {
+      resetAfterDeath(scene);
+    });
+  } else {
+    doGameOver(scene);
+  }
 }
 
 function resetAfterDeath(scene) {
+  // Ensure game stays paused during countdown (already set in handlePlayerHit)
   scenePaused = true;
-  player.body.setVelocity(0, 0);
-  player.setData('currentSpeed', 0);
   
   // Reset player to spawn position and rotation
   const spawnX = player.getData('spawnX');
@@ -1427,8 +1847,14 @@ function resetAfterDeath(scene) {
     // Fallback to old system
     player.angle = 0;
     player.x = playerSpawn.c * TILE + TILE / 2;
-    player.y = playerSpawn.r * TILE + TILE / 2;
+    player.y = playerSpawn.r * TILE + TILE / 2 + HUD_TOP_PADDING;
   }
+  
+  // Reset player movement completely
+  player.body.setVelocity(0, 0);
+  player.setData('currentSpeed', 0);
+  player.setData('isDrifting', false);
+  player.setVisible(true); // Make player visible again
 
   // Reset enemies to their spawn positions
   enemies.forEach(e => {
@@ -1452,13 +1878,26 @@ function resetAfterDeath(scene) {
     e.setData('canBeEaten', true); // Reset after death
   });
 
-  readyText = scene.add.text(width / 2, height / 2 + 40, 'READY!', {
-    fontFamily: 'monospace', fontSize: '32px', color: '#ffff00',
-  }).setOrigin(0.5);
+  // Countdown sequence: 3, 2, 1, GO!
+  let countdownText = scene.add.text(width / 2, height / 2, '3', {
+    fontFamily: 'monospace', fontSize: '72px', color: '#ffff00', fontStyle: 'bold'
+  }).setOrigin(0.5).setDepth(1000);
 
-  scene.time.delayedCall(1400, () => {
+  scene.time.delayedCall(1000, () => {
+    countdownText.setText('2');
+  });
+
+  scene.time.delayedCall(2000, () => {
+    countdownText.setText('1');
+  });
+
+  scene.time.delayedCall(3000, () => {
+    countdownText.setText('GO!');
+  });
+
+  scene.time.delayedCall(3500, () => {
     scenePaused = false;
-    readyText.destroy();
+    countdownText.destroy();
   });
 }
 
@@ -1468,7 +1907,7 @@ function doGameOver(scene) {
     fontFamily: 'monospace',
     fontSize: '48px',
     color: '#ff4f5e',
-  }).setOrigin(0.5);
+  }).setOrigin(0.5).setDepth(1000); // Very high depth to be above everything
 
   scene.time.delayedCall(1500, () => {
     gameOverText.destroy();
