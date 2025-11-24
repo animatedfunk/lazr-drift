@@ -16,8 +16,6 @@ const BUILD_VERSION = "v0.1.9a"; // <-- update this anytime you deploy
 const TILE = 48;
 const COLS = 28;
 const ROWS = 16;
-const HUD_TOP_PADDING = 80;
-const HUD_BOTTOM_PADDING = 70;
 const SCALE_FACTOR = 1.75;
 let MAX_SPEED = 210 * SCALE_FACTOR;
 let REVERSE_SPEED = 100 * SCALE_FACTOR;
@@ -37,10 +35,14 @@ const KILL_SCORE = 200;
 const SPRITE_SIZE = 24; // size of each tile in sprites.png
 
 // Frame index in the spritesheet for each tile ID
-// sprites.png is 6x3 frames laid out like this:
-// Row 0: empty, diamond (dot), plus (power), dotted square, dotted fill, X box
-// Row 1: track pieces (6-11)
-// Row 2: new wall pieces (13-16)
+// sprites.png is 6x2 frames laid out like this:
+// 0: empty
+// 1: diamond (dot)
+// 2: plus (power)
+// 3: dotted square
+// 4: dotted fill
+// 5: X box
+// 6–11: track pieces
 const tileFrameMap = {
   0: 0,  // empty
   2: 1,  // dot (no longer used for gameplay, but still a valid frame)
@@ -54,17 +56,12 @@ const tileFrameMap = {
   9: 8,  // corner NE
  10: 9,  // corner NW
  11: 10, // corner SE
- 12: 11, // corner SW
-
- 13: 12, // wall west
- 14: 13, // wall south
- 15: 14, // wall east
- 16: 15  // wall north
+ 12: 11  // corner SW
 };
 
-// Wall helper – includes all wall tiles
+// ONE wall helper – no legacy tile 1
 function isWall(val) {
-  return val >= 7 && val <= 16;
+  return val >= 7 && val <= 12;
 }
 
 
@@ -82,11 +79,7 @@ const tileDebugColors = {
   9: 0x66ccff,
   10: 0x66ccff,
   11: 0x66ccff,
-  12: 0x66ccff,
-  13: 0x66ccff,
-  14: 0x66ccff,
-  15: 0x66ccff,
-  16: 0x66ccff
+  12: 0x66ccff
 };
 
 
@@ -97,10 +90,8 @@ let gateTiles = [];
 let playerSpawn = { r: 1, c: 1 };
 
 // ---------- GAME STATE ----------
-const PLAY_AREA_WIDTH = COLS * TILE;
-const PLAY_AREA_HEIGHT = ROWS * TILE;
-const width = PLAY_AREA_WIDTH;
-const height = PLAY_AREA_HEIGHT + HUD_TOP_PADDING + HUD_BOTTOM_PADDING;
+const width = COLS * TILE;
+const height = ROWS * TILE;
 let score = 0;
 let highScore = 0;
 let lives = 3;
@@ -108,7 +99,7 @@ let powered = false;
 let powerTimer = 0;
 
 let player, cursors, keys, gamepad;
-let scoreText, highScoreText, highScoreLabelText, livesIcons;
+let scoreText, highScoreText, livesText;
 let walls, dotsGroup, powerGroup;
 let enemies = [];
 
@@ -803,9 +794,7 @@ class GameScene extends Phaser.Scene {
     this.load.tilemapCSV('level1', 'maps/level1.csv');
     this.load.tilemapCSV('level2', 'maps/level2.csv');
     this.load.tilemapCSV('level3', 'maps/level3.csv');
-    this.load.svg('redCar', 'red-car.svg', { width: 36, height: 20 });
-    this.load.svg('enemy', 'enemy.svg', { width: 32, height: 28 });
-    this.load.svg('logo', 'LD-logo.svg', { width: 96, height: 96 });
+    this.load.svg('redCar', 'red-car.svg', { width: 32, height: 24 });
     
     // Use spritesheet so each tile is a 24x24 frame
     this.load.spritesheet('tiles', 'maps/sprites.png', {
@@ -816,10 +805,7 @@ class GameScene extends Phaser.Scene {
     // Dot image (separate file, at /dot.png)
     this.load.image('dot', 'maps/dot.png');
     
-    // Power pellet image (separate file)
-    this.load.image('power', 'maps/power.png');
-    
-    // Collectibles positions (exported from editor) - contains both dots and powers
+    // Dots positions (exported from editor)
     this.load.json('level1_dots', 'maps/level1-dots.json');
     this.load.json('level2_dots', 'maps/level2-dots.json');
     this.load.json('level3_dots', 'maps/level3-dots.json');
@@ -848,7 +834,7 @@ const config = {
   type: Phaser.AUTO,
   width,
   height,
-  backgroundColor: '#190a27',
+  backgroundColor: '#0a0a0a',
   physics: { 
     default: 'arcade', 
     arcade: { 
@@ -922,9 +908,8 @@ function startLevel(scene, levelNum) {
       const val = maze[r][c];
 
       // Top-left of this tile in world space (editor uses 24, we use 48)
-      // Add HUD_TOP_PADDING to Y coordinate to offset play area down
       const x = c * TILE;
-      const y = r * TILE + HUD_TOP_PADDING;
+      const y = r * TILE;
 
       // Center (for physics bodies)
       const centerX = x + TILE / 2;
@@ -934,11 +919,10 @@ function startLevel(scene, levelNum) {
 
       // 1) Background tiles: empty, “track” tiles, walls, pen, gate
       //    NOTE: val === 2 is treated as background only now
-      if (frame !== undefined && (val === 0 || val === 2 || isWall(val) || val === 4 || val === 5 || val === 6)) {
+      if (frame !== undefined && (val === 0 || val === 2 || isWall(val) || val === 5 || val === 6)) {
         const tileImg = scene.add.image(x, y, 'tiles', frame);
         tileImg.setOrigin(0, 0);      // top-left like the editor
         tileImg.setScale(tileScale);  // 24 -> 48
-        tileImg.setDepth(0);           // level tiles on bottom layer
       }
 
       // 2) Collision walls (physics only; visuals from background tiles)
@@ -952,38 +936,32 @@ function startLevel(scene, levelNum) {
         wall.body.setOffset(0, 0);
         wall.setVisible(false);
         wall.refreshBody();
+
+      // 3) Powerup tiles: sprite + static physics (still grid-based)
+      } else if (val === 3) {
+        const powerFrame = tileFrameMap[3];
+        const power = scene.add.image(x, y, 'tiles', powerFrame);
+        power.setOrigin(0, 0);
+        power.setScale(tileScale);
+
+        scene.physics.add.existing(power, true);
+        powerGroup.add(power);
       }
     }
   }
 
-  // --- create dots and powers from external JSON layer (AFTER tiles, so they render on top) ---
-  const collectiblesKey = `level${levelNum}_dots`;
-  const collectiblesData = scene.cache.json.get(collectiblesKey) || {};
-  
-  // Handle both new format { dots: [...], powers: [...] } and legacy format [...]
-  const dotData = collectiblesData.dots || (Array.isArray(collectiblesData) ? collectiblesData : []);
-  const powerData = collectiblesData.powers || [];
-  const logoData = collectiblesData.logo || null;
-  const playerSpawnData = collectiblesData.playerSpawn || null;
-  const enemySpawnData = collectiblesData.enemySpawns || [];
+  // --- create dots from external JSON layer (AFTER tiles, so they render on top) ---
+  const dotsKey = `level${levelNum}_dots`;
+  const dotData = scene.cache.json.get(dotsKey) || [];
 
   // Editor used TILE_SIZE = 24; game uses TILE = 48
   const editorTileSize = 24;
   const posScale = TILE / editorTileSize; // 2
 
-  // Render logo if present (depth 2 - above tiles, below collectibles)
-  if (logoData) {
-    const logoX = logoData.x * posScale;
-    const logoY = logoData.y * posScale + HUD_TOP_PADDING;
-    const logoSprite = scene.add.image(logoX, logoY, 'logo');
-    logoSprite.setOrigin(0.5, 0.5);
-    logoSprite.setDepth(2); // Logo above tiles but below collectibles
-  }
-
   dotData.forEach(d => {
     // d.x, d.y are editor pixel coords (center of dot)
     const worldX = d.x * posScale;
-    const worldY = d.y * posScale + HUD_TOP_PADDING;
+    const worldY = d.y * posScale;
 
     const dot = scene.add.image(worldX, worldY, 'dot');
     dot.setOrigin(0.5, 0.5);
@@ -993,80 +971,35 @@ function startLevel(scene, levelNum) {
     dotsGroup.add(dot);
   });
 
-  // Spawn power pellets from JSON
-  powerData.forEach(p => {
-    const worldX = p.x * posScale;
-    const worldY = p.y * posScale + HUD_TOP_PADDING;
-
-    const power = scene.add.image(worldX, worldY, 'power');
-    power.setOrigin(0.5, 0.5);
-    power.setScale(1.5); // Increase size by 50%
-    power.setDepth(5); // power pellets at same depth as dots
-
-    scene.physics.add.existing(power, true);
-    powerGroup.add(power);
-  });
-
-  // --- car setup (use playerSpawnData if available, fallback to old system) ---
-  let px, py, pRotation = 0;
-  if (playerSpawnData) {
-    px = playerSpawnData.x * posScale;
-    py = playerSpawnData.y * posScale + HUD_TOP_PADDING;
-    pRotation = playerSpawnData.rotation || 0;
-  } else {
-    // Fallback to old grid-based spawn
-    px = playerSpawn.c * TILE + TILE / 2;
-    py = playerSpawn.r * TILE + TILE / 2 + HUD_TOP_PADDING;
-  }
-  
+  // --- car setup ---
+  const px = playerSpawn.c * TILE + TILE / 2;
+  const py = playerSpawn.r * TILE + TILE / 2;
   player = scene.add.container(px, py);
 
   const carSprite = scene.add.image(0, 0, 'redCar');
-  // red-car.svg is approximately 36x20, which is 1.8:1 ratio
-  const carDisplayWidth = 36 * SCALE_FACTOR;
-  const carDisplayHeight = 20 * SCALE_FACTOR;
-  carSprite.setDisplaySize(carDisplayWidth, carDisplayHeight);
+  carSprite.setDisplaySize(32 * SCALE_FACTOR, 24 * SCALE_FACTOR);
 
   const driftIndicator = scene.add.rectangle(-15 * SCALE_FACTOR, 0, 20 * SCALE_FACTOR, 8 * SCALE_FACTOR, 0xff6600, 0.8);
   driftIndicator.setName('driftIndicator');
   driftIndicator.setVisible(false);
 
   player.add([driftIndicator, carSprite]);
-  player.setDepth(10); // player on top of everything
   scene.physics.add.existing(player);
-  
-  // Set world bounds to play area only (excluding HUD padding)
-  scene.physics.world.setBounds(0, HUD_TOP_PADDING, PLAY_AREA_WIDTH, PLAY_AREA_HEIGHT);
   player.body.setCollideWorldBounds(true);
 
-  // Collision body should match visual size
-  const carWidth = carDisplayWidth * 0.85; // Slightly smaller for better gameplay feel
-  const carHeight = carDisplayHeight * 0.8;
+  const carWidth = 28 * SCALE_FACTOR;
+  const carHeight = 20 * SCALE_FACTOR;
   player.body.setSize(carWidth, carHeight);
   player.body.setOffset(-carWidth / 2, -carHeight / 2);
 
   player.body.setMaxVelocity(MAX_SPEED);
   player.setData('currentSpeed', 0);
   player.setData('isDrifting', false);
-  player.setData('spawnX', px); // Store spawn position
-  player.setData('spawnY', py);
-  player.setData('spawnRotation', pRotation);
-  player.angle = pRotation; // Set initial rotation from spawn data
+  player.angle = 0;
 
-  // spawn enemies (use enemySpawnData if available, fallback to old system)
-  if (enemySpawnData && enemySpawnData.length > 0) {
-    // Use new precise spawn system
-    enemySpawnData.forEach(spawnData => {
-      const ex = spawnData.x * posScale;
-      const ey = spawnData.y * posScale + HUD_TOP_PADDING;
-      const eRotation = spawnData.rotation || 0;
-      spawnEnemyAtPosition(scene, ex, ey, eRotation);
-    });
-  } else {
-    // Fallback to old pen-based spawning
-    const penSpawns = Phaser.Utils.Array.Shuffle([...penTiles]).slice(0, 4);
-    for (let pos of penSpawns) spawnEnemy(scene, pos);
-  }
+  // spawn enemies
+  const penSpawns = Phaser.Utils.Array.Shuffle([...penTiles]).slice(0, 4);
+  for (let pos of penSpawns) spawnEnemy(scene, pos);
 
   scene.physics.add.collider(player, walls);
   enemies.forEach(e => scene.physics.add.collider(e, walls));
@@ -1082,13 +1015,7 @@ function startLevel(scene, levelNum) {
     p.destroy();
     powered = true;
     powerTimer = scene.time.now + POWER_DURATION;
-    // Reset all enemies to be eatable and apply tint
-    enemies.forEach(e => {
-      e.setData('canBeEaten', true);
-      if (e.visible && e.body.enable) {
-        e.list[0].setTint(0x00e5ff);
-      }
-    });
+    enemies.forEach(e => e.list[0].setFillStyle(0x00e5ff));
   });
 
   scene.physics.add.overlap(player, enemies, (_, e) => {
@@ -1118,29 +1045,9 @@ function startLevel(scene, levelNum) {
     gamepad = null;
   });
 
-  // Score display (top left, no label, 28px font)
-  scoreText = scene.add.text(16, 20, '0', { 
-    fontFamily: 'monospace', 
-    fontSize: '28px', 
-    color: '#ffffff' 
-  });
-
-  // High score display (top center)
-  highScoreLabelText = scene.add.text(width / 2, 16, 'HIGH SCORE', { 
-    fontFamily: 'monospace', 
-    fontSize: '16px', 
-    color: '#9b41c6' 
-  }).setOrigin(0.5, 0);
-  
-  highScoreText = scene.add.text(width / 2, 38, `${highScore}`, { 
-    fontFamily: 'monospace', 
-    fontSize: '36px', 
-    color: '#ffffff' 
-  }).setOrigin(0.5, 0);
-
-  // Lives display (bottom left, car icons)
-  livesIcons = [];
-  updateLivesDisplay(scene);
+  scoreText = scene.add.text(12, height - 24, 'SCORE: 0', { fontFamily: 'monospace', fontSize: '16px', color: '#fff' });
+  highScoreText = scene.add.text(width - 160, height - 24, `HIGH: ${highScore}`, { fontFamily: 'monospace', fontSize: '16px', color: '#ffd54f' });
+  livesText = scene.add.text(12, 6, `LIVES: ${lives}`, { fontFamily: 'monospace', fontSize: '16px', color: '#ff8080' });
 
   showReady(scene, levelNum);
 }
@@ -1181,7 +1088,7 @@ function updateGame(time, delta) {
 
   if (powered && time >= powerTimer) {
     powered = false;
-    enemies.forEach(e => e.list[0].clearTint());
+    enemies.forEach(e => e.list[0].setFillStyle(0x7c4dff));
   }
 
   const input = getInputDirection();
@@ -1311,87 +1218,42 @@ function getInputDirection() {
 
 function spawnEnemy(scene, gridPos) {
   const x = gridPos.c * TILE + TILE / 2;
-  const y = gridPos.r * TILE + TILE / 2 + HUD_TOP_PADDING;
+  const y = gridPos.r * TILE + TILE / 2;
   const e = scene.add.container(x, y);
   
-  const sprite = scene.add.image(0, 0, 'enemy');
-  sprite.setScale(SCALE_FACTOR);
-  e.add(sprite);
-  e.setDepth(10); // enemies on top of everything
+  const body = scene.add.rectangle(0, 0, TILE * 0.45 * SCALE_FACTOR, TILE * 0.3 * SCALE_FACTOR, 0x7c4dff);
+  e.add(body);
   
   scene.physics.add.existing(e);
-  const enemyWidth = 26 * SCALE_FACTOR;
-  const enemyHeight = 20 * SCALE_FACTOR;
+  const enemyWidth = 20 * SCALE_FACTOR;
+  const enemyHeight = 16 * SCALE_FACTOR;
   e.body.setSize(enemyWidth, enemyHeight);
   e.body.setOffset(-enemyWidth / 2, -enemyHeight / 2);
   
   e.setData('mode', 'leaving');
   e.setData('nextMoveTime', 0);
-  e.setData('spawnX', x);
-  e.setData('spawnY', y);
-  e.setData('spawnRotation', 0);
-  e.setData('canBeEaten', true); // Track if enemy can be eaten during power mode
-  enemies.push(e);
-  scene.physics.add.collider(e, walls);
-}
-
-// New function for spawning with precise position and rotation
-function spawnEnemyAtPosition(scene, x, y, rotation) {
-  const e = scene.add.container(x, y);
-  
-  const sprite = scene.add.image(0, 0, 'enemy');
-  sprite.setScale(SCALE_FACTOR);
-  e.add(sprite);
-  e.setDepth(10); // enemies on top of everything
-  e.angle = rotation; // Set initial rotation
-  
-  scene.physics.add.existing(e);
-  const enemyWidth = 26 * SCALE_FACTOR;
-  const enemyHeight = 20 * SCALE_FACTOR;
-  e.body.setSize(enemyWidth, enemyHeight);
-  e.body.setOffset(-enemyWidth / 2, -enemyHeight / 2);
-  
-  e.setData('mode', 'leaving');
-  e.setData('nextMoveTime', 0);
-  e.setData('spawnX', x);
-  e.setData('spawnY', y);
-  e.setData('spawnRotation', rotation);
-  e.setData('canBeEaten', true); // Track if enemy can be eaten during power mode
   enemies.push(e);
   scene.physics.add.collider(e, walls);
 }
 
 function handleEnemyHit(scene, enemy) {
-  // Only allow eating if enemy is marked as eatable
-  if (!enemy.getData('canBeEaten')) return;
-  
   enemy.setVisible(false);
   enemy.body.enable = false;
   score += KILL_SCORE;
   updateScore();
-  
   scene.time.delayedCall(900, () => {
-    // Respawn at original spawn position
-    const spawnX = enemy.getData('spawnX');
-    const spawnY = enemy.getData('spawnY');
-    const spawnRotation = enemy.getData('spawnRotation') || 0;
-    
-    enemy.x = spawnX;
-    enemy.y = spawnY;
-    enemy.angle = spawnRotation;
+    const pos = Phaser.Utils.Array.GetRandom(penTiles);
+    enemy.x = pos.c * TILE + TILE / 2;
+    enemy.y = pos.r * TILE + TILE / 2;
     enemy.setData('mode', 'leaving');
     enemy.setVisible(true);
     enemy.body.enable = true;
-    
-    // Enemy respawns dangerous - can't be eaten again during same power mode
-    enemy.setData('canBeEaten', false);
-    enemy.list[0].clearTint(); // Clear tint immediately to show it's dangerous
   });
 }
 
 function handlePlayerHit(scene) {
   lives = Math.max(0, lives - 1);
-  updateLivesDisplay(scene);
+  livesText.setText(`LIVES: ${lives}`);
   if (lives > 0) resetAfterDeath(scene);
   else doGameOver(scene);
 }
@@ -1400,43 +1262,16 @@ function resetAfterDeath(scene) {
   scenePaused = true;
   player.body.setVelocity(0, 0);
   player.setData('currentSpeed', 0);
-  
-  // Reset player to spawn position and rotation
-  const spawnX = player.getData('spawnX');
-  const spawnY = player.getData('spawnY');
-  const spawnRotation = player.getData('spawnRotation');
-  
-  if (spawnX !== undefined && spawnY !== undefined) {
-    player.x = spawnX;
-    player.y = spawnY;
-    player.angle = spawnRotation || 0;
-  } else {
-    // Fallback to old system
-    player.angle = 0;
-    player.x = playerSpawn.c * TILE + TILE / 2;
-    player.y = playerSpawn.r * TILE + TILE / 2;
-  }
+  player.angle = 0;
+  player.x = playerSpawn.c * TILE + TILE / 2;
+  player.y = playerSpawn.r * TILE + TILE / 2;
 
-  // Reset enemies to their spawn positions
   enemies.forEach(e => {
-    const ex = e.getData('spawnX');
-    const ey = e.getData('spawnY');
-    const eRotation = e.getData('spawnRotation') || 0;
-    
-    if (ex !== undefined && ey !== undefined) {
-      e.x = ex;
-      e.y = ey;
-      e.angle = eRotation;
-    } else {
-      // Fallback to random pen tile
-      const pos = Phaser.Utils.Array.GetRandom(penTiles);
-      e.x = pos.c * TILE + TILE / 2;
-      e.y = pos.r * TILE + TILE / 2 + HUD_TOP_PADDING;
-    }
-    
+    const pos = Phaser.Utils.Array.GetRandom(penTiles);
+    e.x = pos.c * TILE + TILE / 2;
+    e.y = pos.r * TILE + TILE / 2;
     e.body.setVelocity(0, 0);
     e.setData('mode', 'leaving');
-    e.setData('canBeEaten', true); // Reset after death
   });
 
   readyText = scene.add.text(width / 2, height / 2 + 40, 'READY!', {
@@ -1471,8 +1306,7 @@ function doGameOver(scene) {
 }
 
 function updateEnemy(scene, enemy, playerObj) {
-  // Account for HUD offset when calculating tile position
-  const tileR = Math.floor((enemy.y - HUD_TOP_PADDING) / TILE);
+  const tileR = Math.floor(enemy.y / TILE);
   const tileC = Math.floor(enemy.x / TILE);
 
   if (!enemy.getData('nextMoveTime') || scene.time.now > enemy.getData('nextMoveTime')) {
@@ -1493,8 +1327,7 @@ function updateEnemy(scene, enemy, playerObj) {
       const path = findPath(tileR, tileC, target.r, target.c);
       if (path && path.length > 1) {
         const next = path[1];
-        // Convert grid coordinates to world coordinates with HUD offset
-        goToward(enemy, next.c * TILE + TILE / 2, next.r * TILE + TILE / 2 + HUD_TOP_PADDING, scene);
+        goToward(enemy, next.c * TILE + TILE / 2, next.r * TILE + TILE / 2, scene);
       }
     }
   }
@@ -1507,8 +1340,7 @@ function goToward(enemy, nx, ny, scene) {
   const speed = (powered ? ENEMY_SPEED_BASE * 0.6 : ENEMY_SPEED_BASE) * Math.pow(ENEMY_SPEED_SCALE, currentLevel - 1);
   enemy.body.setVelocity((dx / dist) * speed, (dy / dist) * speed);
   
-  // SVG faces east (right), so no rotation adjustment needed
-  enemy.angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx));
+  enemy.angle = Phaser.Math.RadToDeg(Math.atan2(dy, dx)) + 90;
 }
 
 function nearestGateByPath(sr, sc) {
@@ -1525,8 +1357,7 @@ function nearestGateByPath(sr, sc) {
 }
 
 function decideEnemyTarget(playerObj, r, c) {
-  // Account for HUD offset when calculating player's tile position
-  const playerR = Math.floor((playerObj.y - HUD_TOP_PADDING) / TILE);
+  const playerR = Math.floor(playerObj.y / TILE);
   const playerC = Math.floor(playerObj.x / TILE);
   const dist = Phaser.Math.Distance.Between(c, r, playerC, playerR);
   if (dist < 8) return { r: playerR, c: playerC };
@@ -1585,43 +1416,15 @@ function nextLevel(scene) {
 }
 
 function updateScore() {
-  scoreText.setText(`${score}`);
+  scoreText.setText(`SCORE: ${score}`);
 
   // Live HUD high score based on current run
   if (score > highScore) {
     highScore = score;
   }
 
-  highScoreText.setText(`${highScore}`);
+  highScoreText.setText(`HIGH: ${highScore}`);
 }
-
-function updateLivesDisplay(scene) {
-  // Clear old icons
-  livesIcons.forEach(icon => icon.destroy());
-  livesIcons = [];
-  
-  // Create car icons for each life (bottom left)
-  const iconWidth = 16; // This will be the height after rotation
-  const iconSpacing = 8;
-  const startX = 16;
-  const startY = height - 40; // 40px from bottom (was 30px)
-  
-  for (let i = 0; i < lives; i++) {
-    const carIcon = scene.add.image(startX + (i * (iconWidth + iconSpacing)), startY, 'redCar');
-    
-    // Car SVG is wider than tall (aspect ratio ~1.8:1)
-    // After 90° rotation, width becomes height
-    // So if we want final width of 16px, we need to set the height to 16px before rotation
-    const carAspectRatio = 1.8; // red-car.svg is approximately 36x20, so 1.8:1
-    carIcon.setDisplaySize(iconWidth * carAspectRatio, iconWidth); // width=28.8, height=16
-    
-    carIcon.setOrigin(0, 0.5);
-    carIcon.setAngle(-90); // Rotate 90° counter-clockwise
-    carIcon.setDepth(100); // Make sure icons are always on top
-    livesIcons.push(carIcon);
-  }
-}
-
 function drawVersionTag(scene) {
   scene.add.text(
     width - 10,
