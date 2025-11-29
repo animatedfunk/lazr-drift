@@ -164,13 +164,209 @@ function scoreQualifiesForTable(scoreValue) {
 class StartScene extends Phaser.Scene {
   constructor() {
     super({ key: 'StartScene' });
+    this.riveCanvas = null;
+    this.riveInstance = null;
   }
 
   create() {
+    // Create a canvas for Rive animation
+    // Your Rive artboard is 1344×768 (no HUD on start screen)
+    const riveWidth = 1344;
+    const riveHeight = 768;
+    
+    this.riveCanvas = document.createElement('canvas');
+    this.riveCanvas.width = riveWidth;
+    this.riveCanvas.height = riveHeight;
+    this.riveCanvas.style.position = 'absolute';
+    
+    // Get the Phaser canvas position to align with it
+    const gameCanvas = this.game.canvas;
+    const rect = gameCanvas.getBoundingClientRect();
+    
+    // Center Rive canvas vertically within game canvas
+    const topOffset = (height - riveHeight) / 2;
+    this.riveCanvas.style.top = (rect.top + topOffset) + 'px';
+    this.riveCanvas.style.left = rect.left + 'px';
+    this.riveCanvas.style.width = riveWidth + 'px';
+    this.riveCanvas.style.height = riveHeight + 'px';
+    this.riveCanvas.style.pointerEvents = 'auto';
+    this.riveCanvas.style.zIndex = '10';
+    
+    // Improve rendering quality
+    this.riveCanvas.style.imageRendering = 'high-quality';
+    
+    // Add canvas to body (not game container) for better positioning
+    document.body.appendChild(this.riveCanvas);
+    
+    // Load and initialize Rive animation
+    this.loadRiveAnimation();
+    
+    // Set up Rive canvas event listeners
+    // Note: Rive handles button clicks and hovers automatically via its State Machine
+    // The Boolean inputs will be set true/false on hover
+    // The Trigger inputs will fire on click
+    // Events are passed through to Rive's internal event system
+    
+    // Keyboard controls for accessibility and navigation
+    this.cursors = this.input.keyboard.createCursorKeys();
+    this.keys = this.input.keyboard.addKeys('W,A,S,D,ENTER,SPACE');
+    
+    // Menu selection tracking
+    // Layout: [0] Start Game (top row, full width)
+    //         [1] Level Select | [2] How To Play | [3] High Scores (bottom row)
+    this.selectedButtonIndex = 0;
+    this.buttonCount = 4;
+    
+    // Gamepad
+    this.input.gamepad.start();
+    this.gamepad = null;
+  }
+
+  async loadRiveAnimation() {
+    try {
+      // Load Rive runtime if not already loaded
+      if (typeof rive === 'undefined') {
+        console.error('Rive runtime not loaded. Make sure to include rive.js in your HTML');
+        this.fallbackToPhaser();
+        return;
+      }
+
+      console.log('Initializing Rive animation...');
+
+      // Create Rive instance
+      this.riveInstance = new rive.Rive({
+        src: 'start_screen.riv',
+        canvas: this.riveCanvas,
+        autoplay: true,
+        stateMachines: 'State Machine 1',
+        shouldDisableRiveListeners: false,
+        layout: new rive.Layout({
+          fit: rive.Fit.Contain,
+          alignment: rive.Alignment.Center
+        }),
+        onLoad: () => {
+          console.log('Rive animation loaded');
+          this.riveInstance.resizeDrawingSurfaceToCanvas();
+          
+          // Store load time to prevent immediate transitions
+          this.riveLoadTime = Date.now();
+          
+          // Get state machine inputs
+          const inputs = this.riveInstance.stateMachineInputs('State Machine 1');
+          
+          console.log('ALL Rive inputs:', inputs);
+          console.log('Input names:', inputs.map(i => `${i.name} (${i.type})`));
+          
+          // Get Boolean inputs for hover states
+          this.btnSG_Bool = inputs.find(i => i.name === 'BTN_SG_Bool');
+          this.btnLS_Bool = inputs.find(i => i.name === 'BTN_LS_Bool');
+          this.btnH2P_Bool = inputs.find(i => i.name === 'BTN_H2P_Bool');
+          this.btnHS_Bool = inputs.find(i => i.name === 'BTN_HS_Bool');
+          
+          // Get Trigger inputs for clicks
+          this.btnSG_Trig = inputs.find(i => i.name === 'BTN_SG_Trig');
+          this.btnLS_Trig = inputs.find(i => i.name === 'BTN_LS_Trig');
+          this.btnH2P_Trig = inputs.find(i => i.name === 'BTN_H2P_Trig');
+          this.btnHS_Trig = inputs.find(i => i.name === 'BTN_HS_Trig');
+          
+          console.log('Rive inputs found:', {
+            'Start Game Bool': !!this.btnSG_Bool,
+            'Start Game Trig': !!this.btnSG_Trig,
+            'Level Select Bool': !!this.btnLS_Bool,
+            'Level Select Trig': !!this.btnLS_Trig,
+            'How To Play Bool': !!this.btnH2P_Bool,
+            'How To Play Trig': !!this.btnH2P_Trig,
+            'High Scores Bool': !!this.btnHS_Bool,
+            'High Scores Trig': !!this.btnHS_Trig
+          });
+        },
+        onLoadError: (err) => {
+          console.error('Failed to load Rive file:', err);
+          this.fallbackToPhaser();
+        },
+        // Listen for Rive events (more reliable than state changes for button clicks)
+        onRiveEventReceived: (riveEvent) => {
+          console.log('Rive event received:', riveEvent);
+          const eventName = riveEvent.data?.name || '';
+          console.log('Event name:', eventName);
+          
+          // Match event names to scene transitions
+          if (eventName === 'startGame' || eventName === 'StartGame') {
+            console.log('Starting game via event...');
+            this.cleanupRive();
+            this.scene.start('GameScene');
+          } else if (eventName === 'levelSelect' || eventName === 'LevelSelect') {
+            console.log('Opening level select via event...');
+            this.cleanupRive();
+            this.scene.start('LevelSelectScene');
+          } else if (eventName === 'howToPlay' || eventName === 'HowToPlay') {
+            console.log('Opening how to play via event...');
+            this.cleanupRive();
+            this.scene.start('HowToScene');
+          } else if (eventName === 'highScores' || eventName === 'HighScores') {
+            console.log('Opening high scores via event...');
+            this.cleanupRive();
+            this.scene.start('HighScoresScene');
+          }
+        },
+        // Listen for Rive events when buttons are clicked
+        onStateChange: (event) => {
+          console.log('Rive state changed:', event);
+          console.log('State data (all active states):', event.data);
+          
+          // Prevent transitions in the first second after load (initial state setup)
+          if (this.riveLoadTime && Date.now() - this.riveLoadTime < 1000) {
+            console.log('Ignoring state change - too soon after load');
+            return;
+          }
+          
+          // event.data is an array of state names currently active
+          const states = event.data || [];
+          
+          // Log each state to help debug
+          states.forEach(s => console.log('Active state:', s));
+          
+          // Look for Press states (when buttons are clicked)
+          const hasStartPress = states.some(s => s === 'BTN_SG_Press');
+          const hasLevelPress = states.some(s => s === 'BTN_LS_Press');
+          const hasHowToPress = states.some(s => s === 'BTN_H2P_Press');
+          const hasScoresPress = states.some(s => s === 'BTN_HS_Press');
+          
+          if (hasStartPress) {
+            console.log('🎮 Starting game...');
+            this.cleanupRive();
+            this.scene.start('GameScene');
+          } else if (hasLevelPress) {
+            console.log('📋 Opening level select...');
+            this.cleanupRive();
+            this.scene.start('LevelSelectScene');
+          } else if (hasHowToPress) {
+            console.log('❓ Opening how to play...');
+            this.cleanupRive();
+            this.scene.start('HowToScene');
+          } else if (hasScoresPress) {
+            console.log('🏆 Opening high scores...');
+            this.cleanupRive();
+            this.scene.start('HighScoresScene');
+          }
+        }
+      });
+    } catch (error) {
+      console.error('Error initializing Rive:', error);
+      this.fallbackToPhaser();
+    }
+  }
+
+  fallbackToPhaser() {
+    // Remove Rive canvas if it exists
+    if (this.riveCanvas && this.riveCanvas.parentElement) {
+      this.riveCanvas.parentElement.removeChild(this.riveCanvas);
+    }
+    
+    // Create traditional Phaser menu as fallback
     const centerX = width / 2;
     const centerY = height / 2;
 
-    // Title
     this.add.text(centerX, centerY - 150, 'LAZR DRIFT', {
       fontFamily: 'monospace',
       fontSize: '64px',
@@ -179,13 +375,12 @@ class StartScene extends Phaser.Scene {
       strokeThickness: 4
     }).setOrigin(0.5);
 
-    // Menu options
- const menuItems = [
-   { text: 'START GAME', action: 'start' },
-   { text: 'LEVEL SELECT', action: 'levelselect' },
-   { text: 'HOW TO PLAY', action: 'howto' },
-   { text: 'HIGH SCORES', action: 'scores' }
- ];
+    const menuItems = [
+      { text: 'START GAME', action: 'start' },
+      { text: 'LEVEL SELECT', action: 'levelselect' },
+      { text: 'HOW TO PLAY', action: 'howto' },
+      { text: 'HIGH SCORES', action: 'scores' }
+    ];
 
     this.menuTexts = [];
     this.selectedIndex = 0;
@@ -203,64 +398,126 @@ class StartScene extends Phaser.Scene {
 
     this.updateSelection();
 
-    // Keyboard controls
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.keys = this.input.keyboard.addKeys('W,S,ENTER,SPACE');
-
-    // Gamepad
-    this.input.gamepad.start();
-    this.gamepad = null;
-
-    // Instructions
     this.add.text(centerX, height - 40, 'USE ARROW KEYS/W,S • PRESS ENTER/SPACE TO SELECT', {
       fontFamily: 'monospace',
       fontSize: '14px',
       color: '#888888'
     }).setOrigin(0.5);
     
-    // version number
     drawVersionTag(this);
   }
 
   update() {
+    if (!this.riveInstance) return;
+    
     // Get gamepad
     if (!this.gamepad && this.input.gamepad.total > 0) {
       this.gamepad = this.input.gamepad.getPad(0);
     }
-
-    // Navigation - up
+    
+    // Navigation - Up
     if (Phaser.Input.Keyboard.JustDown(this.cursors.up) || 
         Phaser.Input.Keyboard.JustDown(this.keys.W)) {
-      this.selectedIndex = (this.selectedIndex - 1 + this.menuTexts.length) % this.menuTexts.length;
-      this.updateSelection();
+      // From bottom row (1-3) → top row (0)
+      if (this.selectedButtonIndex >= 1) {
+        this.selectedButtonIndex = 0;
+        this.updateRiveSelection();
+      }
     }
     
-    // Navigation - down
+    // Navigation - Down
     if (Phaser.Input.Keyboard.JustDown(this.cursors.down) || 
         Phaser.Input.Keyboard.JustDown(this.keys.S)) {
-      this.selectedIndex = (this.selectedIndex + 1) % this.menuTexts.length;
-      this.updateSelection();
+      // From top row (0) → bottom row (1)
+      if (this.selectedButtonIndex === 0) {
+        this.selectedButtonIndex = 1;
+        this.updateRiveSelection();
+      }
     }
-
+    
+    // Navigation - Left
+    if (Phaser.Input.Keyboard.JustDown(this.cursors.left) || 
+        Phaser.Input.Keyboard.JustDown(this.keys.A)) {
+      // Only on bottom row (1-3)
+      if (this.selectedButtonIndex > 1) {
+        this.selectedButtonIndex--;
+        this.updateRiveSelection();
+      }
+    }
+    
+    // Navigation - Right
+    if (Phaser.Input.Keyboard.JustDown(this.cursors.right) || 
+        Phaser.Input.Keyboard.JustDown(this.keys.D)) {
+      // Only on bottom row (1-2)
+      if (this.selectedButtonIndex >= 1 && this.selectedButtonIndex < 3) {
+        this.selectedButtonIndex++;
+        this.updateRiveSelection();
+      }
+    }
+    
     // Gamepad navigation
     if (this.gamepad) {
       const dpadUp = this.gamepad.buttons[12];
       const dpadDown = this.gamepad.buttons[13];
+      const dpadLeft = this.gamepad.buttons[14];
+      const dpadRight = this.gamepad.buttons[15];
+      const stickX = this.gamepad.axes[0] ? this.gamepad.axes[0].getValue() : 0;
+      const stickY = this.gamepad.axes[1] ? this.gamepad.axes[1].getValue() : 0;
       
-      if (dpadUp && dpadUp.pressed && !this.lastDpadUp) {
-        this.selectedIndex = (this.selectedIndex - 1 + this.menuTexts.length) % this.menuTexts.length;
-        this.updateSelection();
-      }
-      if (dpadDown && dpadDown.pressed && !this.lastDpadDown) {
-        this.selectedIndex = (this.selectedIndex + 1) % this.menuTexts.length;
-        this.updateSelection();
+      // Up
+      if ((dpadUp && dpadUp.pressed) || stickY < -0.5) {
+        if (!this.lastUpPressed) {
+          if (this.selectedButtonIndex >= 1) {
+            this.selectedButtonIndex = 0;
+            this.updateRiveSelection();
+          }
+          this.lastUpPressed = true;
+        }
+      } else {
+        this.lastUpPressed = false;
       }
       
-      this.lastDpadUp = dpadUp && dpadUp.pressed;
-      this.lastDpadDown = dpadDown && dpadDown.pressed;
+      // Down
+      if ((dpadDown && dpadDown.pressed) || stickY > 0.5) {
+        if (!this.lastDownPressed) {
+          if (this.selectedButtonIndex === 0) {
+            this.selectedButtonIndex = 1;
+            this.updateRiveSelection();
+          }
+          this.lastDownPressed = true;
+        }
+      } else {
+        this.lastDownPressed = false;
+      }
+      
+      // Left
+      if ((dpadLeft && dpadLeft.pressed) || stickX < -0.5) {
+        if (!this.lastLeftPressed) {
+          if (this.selectedButtonIndex > 1) {
+            this.selectedButtonIndex--;
+            this.updateRiveSelection();
+          }
+          this.lastLeftPressed = true;
+        }
+      } else {
+        this.lastLeftPressed = false;
+      }
+      
+      // Right
+      if ((dpadRight && dpadRight.pressed) || stickX > 0.5) {
+        if (!this.lastRightPressed) {
+          if (this.selectedButtonIndex >= 1 && this.selectedButtonIndex < 3) {
+            this.selectedButtonIndex++;
+            this.updateRiveSelection();
+          }
+          this.lastRightPressed = true;
+        }
+      } else {
+        this.lastRightPressed = false;
+      }
     }
-
-    // Selection
+    
+    // Selection - Enter/Space or Gamepad A button
     const enterPressed = Phaser.Input.Keyboard.JustDown(this.keys.ENTER) || 
                         Phaser.Input.Keyboard.JustDown(this.keys.SPACE);
     
@@ -272,33 +529,89 @@ class StartScene extends Phaser.Scene {
       }
       this.lastAButton = aButton && aButton.pressed;
     }
+    
+    if (enterPressed || gamepadSelect) {
+      this.fireSelectedButton();
+    }
+  }
+  
+  updateRiveSelection() {
+    // Set all bools to false first
+    if (this.btnSG_Bool) this.btnSG_Bool.value = false;
+    if (this.btnLS_Bool) this.btnLS_Bool.value = false;
+    if (this.btnH2P_Bool) this.btnH2P_Bool.value = false;
+    if (this.btnHS_Bool) this.btnHS_Bool.value = false;
+    
+    // Set selected button's bool to true (highlights it)
+    switch(this.selectedButtonIndex) {
+      case 0: if (this.btnSG_Bool) this.btnSG_Bool.value = true; break;
+      case 1: if (this.btnLS_Bool) this.btnLS_Bool.value = true; break;
+      case 2: if (this.btnH2P_Bool) this.btnH2P_Bool.value = true; break;
+      case 3: if (this.btnHS_Bool) this.btnHS_Bool.value = true; break;
+    }
+  }
+  
+  fireSelectedButton() {
+    console.log('Firing button:', this.selectedButtonIndex);
+    
+    switch(this.selectedButtonIndex) {
+      case 0:
+        if (this.btnSG_Trig) {
+          console.log('Firing Start Game trigger');
+          this.btnSG_Trig.fire();
+        }
+        break;
+      case 1:
+        if (this.btnLS_Trig) {
+          console.log('Firing Level Select trigger');
+          this.btnLS_Trig.fire();
+        }
+        break;
+      case 2:
+        if (this.btnH2P_Trig) {
+          console.log('Firing How To Play trigger');
+          this.btnH2P_Trig.fire();
+        }
+        break;
+      case 3:
+        if (this.btnHS_Trig) {
+          console.log('Firing High Scores trigger');
+          this.btnHS_Trig.fire();
+        }
+        break;
+    }
+  }
 
- if (enterPressed || gamepadSelect) {
-   const action = this.menuTexts[this.selectedIndex].getData('action');
-   
-   if (action === 'start') {
-     this.scene.start('GameScene');
-   } else if (action === 'levelselect') {
-     this.scene.start('LevelSelectScene');
-   } else if (action === 'howto') {
-     this.scene.start('HowToScene');
-   } else if (action === 'scores') {
-     this.scene.start('HighScoresScene');
-   }
- }
+  cleanupRive() {
+    // Clean up Rive instance and canvas when leaving scene
+    if (this.riveInstance) {
+      this.riveInstance.cleanup();
+      this.riveInstance = null;
+    }
+    if (this.riveCanvas && this.riveCanvas.parentElement) {
+      this.riveCanvas.parentElement.removeChild(this.riveCanvas);
+      this.riveCanvas = null;
+    }
+  }
 
+  shutdown() {
+    // Called when scene is shut down
+    this.cleanupRive();
   }
 
   updateSelection() {
-    this.menuTexts.forEach((txt, index) => {
-      if (index === this.selectedIndex) {
-        txt.setColor('#ffff00');
-        txt.setFontSize('32px');
-      } else {
-        txt.setColor('#ffffff');
-        txt.setFontSize('28px');
-      }
-    });
+    // Used by fallback Phaser menu
+    if (this.menuTexts && this.menuTexts.length > 0) {
+      this.menuTexts.forEach((txt, index) => {
+        if (index === this.selectedIndex) {
+          txt.setColor('#ffff00');
+          txt.setFontSize('32px');
+        } else {
+          txt.setColor('#ffffff');
+          txt.setFontSize('28px');
+        }
+      });
+    }
   }
 }
 
