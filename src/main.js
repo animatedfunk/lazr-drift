@@ -13,7 +13,7 @@ let selectedButtonIndex = 0; // Track which button is selected
 let currentLevel = 1;
 let pendingStartLevel = null; // used by Level Select
 
-const BUILD_VERSION = "v0.1.9.2"; // <-- update this anytime you deploy
+const BUILD_VERSION = "v0.2.0"; // <-- update this anytime you deploy
 
 
 // ---------- CONFIG ----------
